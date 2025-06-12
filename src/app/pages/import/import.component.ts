@@ -1,4 +1,359 @@
-styles: [`
+
+// src/app/pages/import/import.component.ts
+import { Component, inject, signal, computed } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
+import { MediaSourceService } from '../../services/media-source.service';
+import { MediaDetectionService, MediaDetectionResult, MediaType, DetectionStats } from '../../services/media-detection.service';
+import { MediaSource, SourceStatus } from '../../models/media-source.model';
+
+export interface ImportSession {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  status: 'idle' | 'scanning' | 'analyzing' | 'reviewing' | 'importing' | 'completed' | 'error';
+  startTime: Date;
+  
+  // Progression
+  overallProgress: number;
+  currentPhase: string;
+  
+  // Résultats du scan
+  scannedFiles: string[];
+  detectionResults: MediaDetectionResult[];
+  
+  // Validation utilisateur
+  validatedResults: MediaDetectionResult[];
+  rejectedResults: MediaDetectionResult[];
+  
+  // Statistiques
+  stats: DetectionStats;
+  
+  // Messages
+  messages: ImportMessage[];
+}
+
+export interface ImportMessage {
+  type: 'info' | 'warning' | 'error' | 'success';
+  message: string;
+  timestamp: Date;
+  details?: string;
+}
+
+@Component({
+  selector: 'app-import',
+  standalone: true,
+  imports: [CommonModule, FormsModule, RouterLink],
+  template: `
+    <div class="import-page">
+      <div class="import-header">
+        <h1>📥 Import de médias</h1>
+        <p>Scannez vos sources et organisez automatiquement vos films, séries et sagas</p>
+      </div>
+
+      <!-- Sélection de source -->
+      <div class="source-selection" *ngIf="!currentImportSession()">
+        <h2>🎯 Choisir une source à importer</h2>
+        <div class="sources-grid">
+          <div *ngFor="let source of availableSources()" 
+               class="source-card" 
+               [class.disabled]="source.status !== 'online'"
+               (click)="selectSource(source)">
+            <div class="source-header">
+              <h3>
+                {{ mediaSourceService.getSourceTypeIcon(source.type) }}
+                {{ source.name }}
+              </h3>
+              <span class="source-status" [style.color]="mediaSourceService.getStatusColor(source.status)">
+                {{ mediaSourceService.getStatusIcon(source.status) }}
+                {{ mediaSourceService.getStatusLabel(source.status) }}
+              </span>
+            </div>
+            
+            <div class="source-info">
+              <p><strong>📂 Chemin :</strong> {{ source.path }}</p>
+              <p><strong>📊 Médias :</strong> {{ source.mediaCount }} fichiers</p>
+              <p><strong>💾 Taille :</strong> {{ mediaSourceService.formatFileSize(source.totalSize) }}</p>
+              <p><strong>🔄 Dernier scan :</strong> {{ formatDate(source.lastScan) }}</p>
+            </div>
+            
+            <div class="source-formats">
+              <span *ngFor="let format of source.fileTypes" class="format-tag">
+                {{ format.toUpperCase() }}
+              </span>
+            </div>
+            
+            <button class="import-btn" 
+                    [disabled]="source.status !== 'online'"
+                    (click)="startImport(source); $event.stopPropagation()">
+              {{ source.status === 'online' ? '📥 Importer' : '❌ Indisponible' }}
+            </button>
+          </div>
+        </div>
+        
+        <div class="import-options">
+          <h3>⚙️ Options d'import</h3>
+          <div class="options-grid">
+            <label class="option-item">
+              <input type="checkbox" [(ngModel)]="importOptions().skipExisting">
+              <span>⏭️ Ignorer les fichiers déjà importés</span>
+            </label>
+            <label class="option-item">
+              <input type="checkbox" [(ngModel)]="importOptions().autoGroup">
+              <span>🔗 Grouper automatiquement les séries et sagas</span>
+            </label>
+            <label class="option-item">
+              <input type="checkbox" [(ngModel)]="importOptions().downloadMetadata">
+              <span>🌟 Télécharger les métadonnées enrichies</span>
+            </label>
+            <label class="option-item">
+              <input type="checkbox" [(ngModel)]="importOptions().generateThumbnails">
+              <span>🖼️ Générer les miniatures automatiquement</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Session d'import en cours -->
+      <div class="import-session" *ngIf="currentImportSession() as session">
+        <div class="session-header">
+          <h2>📥 Import en cours : {{ session.sourceName }}</h2>
+          <div class="session-status">
+            <span class="status-badge" [attr.data-status]="session.status">
+              {{ getStatusIcon(session.status) }} {{ getStatusLabel(session.status) }}
+            </span>
+            <button class="btn secondary" (click)="cancelImport()" *ngIf="canCancelImport(session)">
+              ❌ Annuler
+            </button>
+          </div>
+        </div>
+
+        <!-- Barre de progression globale -->
+        <div class="progress-section">
+          <div class="progress-info">
+            <span>{{ session.currentPhase }}</span>
+            <span>{{ session.overallProgress }}%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" [style.width.%]="session.overallProgress"></div>
+          </div>
+        </div>
+
+        <!-- Phase de scan -->
+        <div class="phase-section" *ngIf="session.status === 'scanning'">
+          <h3>🔍 Scan des fichiers en cours...</h3>
+          <div class="scan-info">
+            <p>📁 Exploration du répertoire : <code>{{ getSelectedSource()?.path }}</code></p>
+            <p>📄 Fichiers trouvés : <strong>{{ session.scannedFiles.length }}</strong></p>
+          </div>
+        </div>
+
+        <!-- Phase d'analyse -->
+        <div class="phase-section" *ngIf="session.status === 'analyzing'">
+          <h3>🤖 Analyse et détection en cours...</h3>
+          <div class="analysis-preview" *ngIf="session.detectionResults.length > 0">
+            <h4>📊 Aperçu de la détection :</h4>
+            <div class="detection-stats">
+              <div class="stat-item">
+                <span class="stat-label">🎬 Films :</span>
+                <span class="stat-value">{{ session.stats.standaloneMovies }}</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">🎭 Films de saga :</span>
+                <span class="stat-value">{{ session.stats.sagaMovies }}</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">📺 Épisodes :</span>
+                <span class="stat-value">{{ session.stats.episodes }}</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">📚 Séries :</span>
+                <span class="stat-value">{{ session.stats.series }}</span>
+              </div>
+              <div class="stat-item">
+                <span class="stat-label">🎯 Sagas :</span>
+                <span class="stat-value">{{ session.stats.sagas }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Phase de révision -->
+        <div class="review-section" *ngIf="session.status === 'reviewing'">
+          <h3>👁️ Révision des résultats de détection</h3>
+          <p>Vérifiez et corrigez la détection automatique avant l'import final.</p>
+          
+          <div class="review-tabs">
+            <button *ngFor="let tab of reviewTabs" 
+                    [class.active]="activeReviewTab() === tab.id"
+                    (click)="setActiveReviewTab(tab.id)"
+                    class="tab-btn">
+              {{ tab.icon }} {{ tab.label }} ({{ getTabCount(tab.id, session) }})
+            </button>
+          </div>
+
+          <div class="review-content">
+            <!-- Onglet Films -->
+            <div *ngIf="activeReviewTab() === 'movies'" class="review-tab-content">
+              <h4>🎬 Films détectés</h4>
+              <div class="detection-list">
+                <div *ngFor="let result of getMovieResults(session)" class="detection-item">
+                  <div class="detection-info">
+                    <h5>{{ result.extractedTitle }}</h5>
+                    <p class="filename">📄 {{ result.originalFilename }}</p>
+                    <span class="confidence" [class]="getConfidenceClass(result.confidence)">
+                      Confiance : {{ (result.confidence * 100).toFixed(0) }}%
+                    </span>
+                  </div>
+                  <div class="detection-actions">
+                    <button class="btn small success" (click)="validateResult(result)">
+                      ✅ Valider
+                    </button>
+                    <button class="btn small secondary" (click)="editResult(result)">
+                      ✏️ Modifier
+                    </button>
+                    <button class="btn small danger" (click)="rejectResult(result)">
+                      ❌ Rejeter
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Onglet Sagas -->
+            <div *ngIf="activeReviewTab() === 'sagas'" class="review-tab-content">
+              <h4>🎭 Sagas détectées</h4>
+              <div class="saga-groups">
+                <div *ngFor="let saga of detectionService.sagasList()" class="saga-group">
+                  <div class="saga-header">
+                    <h5>{{ saga.title }}</h5>
+                    <span class="movie-count">{{ saga.totalMovies }} films</span>
+                  </div>
+                  <div class="saga-movies">
+                    <div *ngFor="let result of getSagaResults(saga.title, session)" class="detection-item compact">
+                      <div class="detection-info">
+                        <span class="movie-title">{{ result.extractedTitle }}</span>
+                        <span class="sequence-number" *ngIf="result.extractedSequenceNumber">
+                          #{{ result.extractedSequenceNumber }}
+                        </span>
+                        <span class="confidence" [class]="getConfidenceClass(result.confidence)">
+                          {{ (result.confidence * 100).toFixed(0) }}%
+                        </span>
+                      </div>
+                      <div class="detection-actions">
+                        <button class="btn small success" (click)="validateResult(result)">✅</button>
+                        <button class="btn small secondary" (click)="editResult(result)">✏️</button>
+                        <button class="btn small danger" (click)="rejectResult(result)">❌</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Onglet Séries -->
+            <div *ngIf="activeReviewTab() === 'series'" class="review-tab-content">
+              <h4>📺 Séries détectées</h4>
+              <div class="series-groups">
+                <div *ngFor="let series of detectionService.seriesList()" class="series-group">
+                  <div class="series-header">
+                    <h5>{{ series.title }}</h5>
+                    <span class="episode-count">{{ series.totalEpisodes }} épisodes, {{ series.totalSeasons }} saisons</span>
+                  </div>
+                  <div class="series-episodes">
+                    <div *ngFor="let result of getSeriesResults(series.title, session)" class="detection-item compact">
+                      <div class="detection-info">
+                        <span class="episode-title">
+                          S{{ result.extractedSeason?.toString().padStart(2, '0') }}E{{ result.extractedEpisode?.toString().padStart(2, '0') }}
+                          {{ result.extractedEpisodeTitle || 'Episode ' + result.extractedEpisode }}
+                        </span>
+                        <span class="confidence" [class]="getConfidenceClass(result.confidence)">
+                          {{ (result.confidence * 100).toFixed(0) }}%
+                        </span>
+                      </div>
+                      <div class="detection-actions">
+                        <button class="btn small success" (click)="validateResult(result)">✅</button>
+                        <button class="btn small secondary" (click)="editResult(result)">✏️</button>
+                        <button class="btn small danger" (click)="rejectResult(result)">❌</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="review-actions">
+            <button class="btn primary large" 
+                    (click)="proceedToImport()"
+                    [disabled]="session.validatedResults.length === 0">
+              📥 Importer {{ session.validatedResults.length }} éléments validés
+            </button>
+            <button class="btn secondary" (click)="validateAllResults()">
+              ✅ Tout valider
+            </button>
+            <button class="btn secondary" (click)="rejectAllResults()">
+              ❌ Tout rejeter
+            </button>
+          </div>
+        </div>
+
+        <!-- Phase d'import -->
+        <div class="phase-section" *ngIf="session.status === 'importing'">
+          <h3>📥 Import en cours...</h3>
+          <p>Import des {{ session.validatedResults.length }} éléments validés</p>
+        </div>
+
+        <!-- Import terminé -->
+        <div class="completion-section" *ngIf="session.status === 'completed'">
+          <h3>🎉 Import terminé avec succès !</h3>
+          <div class="completion-stats">
+            <div class="stat-card success">
+              <h4>✅ Importés</h4>
+              <span class="big-number">{{ session.validatedResults.length }}</span>
+            </div>
+            <div class="stat-card warning">
+              <h4>⏭️ Ignorés</h4>
+              <span class="big-number">{{ session.rejectedResults.length }}</span>
+            </div>
+            <div class="stat-card info">
+              <h4>⏱️ Durée</h4>
+              <span class="big-number">{{ getImportDuration(session) }}</span>
+            </div>
+          </div>
+          
+          <div class="completion-actions">
+            <button class="btn primary" routerLink="/library">
+              📚 Voir la bibliothèque
+            </button>
+            <button class="btn secondary" (click)="startNewImport()">
+              📥 Nouveau scan
+            </button>
+          </div>
+        </div>
+
+        <!-- Messages de log -->
+        <div class="messages-section" *ngIf="session.messages.length > 0">
+          <h4>📋 Journal des opérations</h4>
+          <div class="messages-list">
+            <div *ngFor="let message of getRecentMessages(session)" 
+                 class="message-item" 
+                 [attr.data-type]="message.type">
+              <span class="message-time">{{ formatTime(message.timestamp) }}</span>
+              <span class="message-text">{{ message.message }}</span>
+              <button *ngIf="message.details" 
+                      class="details-btn"
+                      (click)="toggleMessageDetails(message)">
+                ℹ️
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+  styles: [`
     .import-page {
       max-width: 1400px;
       margin: 0 auto;
