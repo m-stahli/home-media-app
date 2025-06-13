@@ -35,20 +35,12 @@ export class TempSettingsComponent { }
 
 export const routes: Routes = [
   { path: '', redirectTo: '/home', pathMatch: 'full' },
-  { 
-    path: 'home', 
-    loadComponent: () => import('./pages/home/home.component').then(m => m.HomeComponent)
-  },
-  { 
-    path: 'library', 
-    loadComponent: () => import('./pages/library/library.component').then(m => m.LibraryComponent)
-  },
-  { 
-    path: 'sources', 
-    loadComponent: () => import('./pages/sources/sources.component').then(m => m.SourcesComponent)
-  },
-  { path: 'player', component: TempPlayerComponent },
-  { path: 'player/:id', component: TempPlayerComponent },
-  { path: 'settings', component: TempSettingsComponent },
+  { path: 'home', loadComponent: () => import('./pages/home/home.component').then(m => m.HomeComponent) },
+  { path: 'library', loadComponent: () => import('./pages/library/library.component').then(m => m.LibraryComponent) },
+  { path: 'sources', loadComponent: () => import('./pages/sources/sources.component').then(m => m.SourcesComponent) },
+  { path: 'import', loadComponent: () => import('./pages/import/import.component').then(m => m.ImportComponent) },
+  { path: 'player', loadComponent: () => import('./pages/player/player.component').then(m => m.PlayerComponent) },
+  { path: 'player/:id', loadComponent: () => import('./pages/player/player.component').then(m => m.PlayerComponent) },
+  { path: 'settings', redirectTo: '/home' }, // 🔥 CHANGEMENT ICI
   { path: '**', redirectTo: '/home' }
 ];

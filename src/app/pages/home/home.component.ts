@@ -278,12 +278,12 @@ playMedia(media: any): void {
   }
 
   importMedia(): void {
-    console.log('Import media');
-    alert('📁 Fonction d\'import à implémenter');
+  console.log('Redirection vers import');
+  this.router.navigate(['/import']);
   }
 
   scanFolders(): void {
-    console.log('Scan folders');
-    alert('🔄 Fonction de scan à implémenter');
-  }
+  console.log('Redirection vers sources');
+  this.router.navigate(['/sources']);
+}
 }

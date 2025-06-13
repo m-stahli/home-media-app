@@ -736,16 +736,20 @@ export class PlayerComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     // Charger le média depuis l'URL
     this.route.params.subscribe(params => {
-      if (params['id']) {
-        const media = this.mediaService.getMediaById(params['id']);
-        if (media) {
-          this.mediaService.setCurrentMedia(media);
-        } else {
-          // Média non trouvé, rediriger vers la bibliothèque
-          this.router.navigate(['/library']);
-        }
+    if (params['id']) {
+      console.log('🔍 ID reçu:', params['id']); // DEBUG
+      const media = this.mediaService.getMediaById(params['id']);
+      console.log('🎬 Média trouvé:', media); // DEBUG
+      
+      if (media) {
+        console.log('🔗 URL du média:', media.url); // DEBUG
+        this.mediaService.setCurrentMedia(media);
+      } else {
+        console.log('❌ Média non trouvé'); // DEBUG
+        this.router.navigate(['/library']);
       }
-    });
+    }
+  });
 
     // Auto-hide des contrôles
     this.setupControlsAutoHide();
